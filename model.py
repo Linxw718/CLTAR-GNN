@@ -9,6 +9,7 @@ import datetime
 import math
 import numpy as np
 import torch
+import joblib
 from torch import nn
 from torch.nn import Module, Parameter
 import torch.nn.functional as F
@@ -16,6 +17,7 @@ from tqdm import tqdm
 from torch.nn import TransformerEncoder
 from torch.nn import TransformerEncoderLayer
 from torch_position_embedding import PositionEmbedding
+from utils import remove_n_random_items
 
 
 class FocalLoss(nn.modules.loss._WeightedLoss):
@@ -107,6 +109,7 @@ class TAR_GNN(Module):
         self.n_node = n_node
         self.len_max = len_max
         self.norm = opt.norm
+        self.save_path = opt.save_path
         self.temperature = opt.temperature
         self.ta = opt.TA
         self.scale = opt.scale
@@ -290,40 +293,63 @@ def contrastive_learning(model, i, data):
     filter_mask = mask[index]
     inputs_len = np.sum(filter_mask, axis=1).tolist()
 
+    # cropping
     inputs_p1 = [inputs[i].tolist()[:inputs_len[i] // 2] + [0] * (model.len_max // 2 - inputs_len[i] // 2) for i in
                  range(len(inputs))]
     inputs_p2 = [inputs[i].tolist()[inputs_len[i] // 2:inputs_len[i]] + [0] * (
                 model.len_max // 2 - (inputs_len[i] - inputs_len[i] // 2)) for i in range(len(inputs))]
 
+    # odd-even
     inputs_even = inputs[:, [k for k in range(0, model.len_max, 2)]]
     inputs_odd = inputs[:, [k for k in range(1, model.len_max, 2)]]
     filter_mask = trans_to_cuda(torch.Tensor(filter_mask).long())
 
-    inputs_i = np.random.permutation(inputs.T).T
-    inputs_j = np.random.permutation(inputs.T).T
+    # random
+    inputs_r1 = np.random.permutation(inputs.T).T
+    inputs_r2 = np.random.permutation(inputs.T).T
+
+    # dropping 
+    inputs_d1 = [remove_n_random_items(inputs[i].tolist(), 1) + [0] * 1 for i in range(len(inputs))]
+    inputs_d2 = [remove_n_random_items(inputs[i].tolist(), 2) + [0] * 2 for i in range(len(inputs))]
+
+    # inserting
+    #inpust_i1 = inputs
+    #inputs_i2 = inputs
 
     inputs_even = torch.Tensor(inputs_even).long()
     inputs_odd = torch.Tensor(inputs_odd).long()
     inputs_p1 = torch.Tensor(inputs_p1).long()
     inputs_p2 = torch.Tensor(inputs_p2).long()
-    inputs_i = torch.Tensor(inputs_i).long()
-    inputs_j = torch.Tensor(inputs_j).long()
+    inputs_r1 = torch.Tensor(inputs_r1).long()
+    inputs_r2 = torch.Tensor(inputs_r2).long()
+    inputs_d1 = torch.Tensor(inputs_d1).long()
+    inputs_d2 = torch.Tensor(inputs_d2).long()
 
     # move paddings to the end of the session
-    x = (inputs_i == 0).float()
+    x = (inputs_r1 == 0).float()
     _, idx = x.sort(1)
-    inputs_i = inputs_i.gather(1, idx)
+    inputs_r1 = inputs_r1.gather(1, idx)
 
-    x = (inputs_j == 0).float()
+    x = (inputs_r2 == 0).float()
     _, idx = x.sort(1)
-    inputs_j = inputs_j.gather(1, idx)
+    inputs_r2 = inputs_r2.gather(1, idx)
 
-    inputs_i = trans_to_cuda(inputs_i)
-    inputs_j = trans_to_cuda(inputs_j)
+    x = (inputs_d1 == 0).float()
+    _, idx = x.sort(1)
+    inputs_d1 = inputs_d1.gather(1, idx)
+
+    x = (inputs_d2 == 0).float()
+    _, idx = x.sort(1)
+    inputs_d2 = inputs_d2.gather(1, idx)
+
+    inputs_r1 = trans_to_cuda(inputs_r1)
+    inputs_r2 = trans_to_cuda(inputs_r2)
     inputs_even = trans_to_cuda(inputs_even)
     inputs_odd = trans_to_cuda(inputs_odd)
     inputs_p1 = trans_to_cuda(inputs_p1)
     inputs_p2 = trans_to_cuda(inputs_p2)
+    inputs_d1 = trans_to_cuda(inputs_d1)
+    inputs_d2 = trans_to_cuda(inputs_d2)
 
     mask_even = filter_mask[:, [k for k in range(0, model.len_max, 2)]]
     mask_odd = filter_mask[:, [k for k in range(1, model.len_max, 2)]]
@@ -335,8 +361,10 @@ def contrastive_learning(model, i, data):
     mask_p1 = trans_to_cuda(torch.Tensor(mask_p1).long())
     mask_p2 = trans_to_cuda(torch.Tensor(mask_p2).long())
 
-    out_r1 = model(inputs_i, filter_mask, is_cl=True, pos_ebd=False)
-    out_r2 = model(inputs_j, filter_mask, is_cl=True, pos_ebd=False)
+    out_r1 = model(inputs_r1, filter_mask, is_cl=True, pos_ebd=False)
+    out_r2 = model(inputs_r2, filter_mask, is_cl=True, pos_ebd=False)
+    out_d1 = model(inputs_d1, filter_mask, is_cl=True, pos_ebd=False)
+    out_d2 = model(inputs_d2, filter_mask, is_cl=True, pos_ebd=False )    
     out_even = model(inputs_even, mask_even, is_cl=True)
     out_odd = model(inputs_odd, mask_odd, is_cl=True)
     out_p1 = model(inputs_p1, mask_p1, is_cl=True)
@@ -344,6 +372,8 @@ def contrastive_learning(model, i, data):
 
     out_r1 = get_sess_ebd(out_r1, filter_mask)
     out_r2 = get_sess_ebd(out_r2, filter_mask)
+    out_d1 = get_sess_ebd(out_d1, filter_mask)
+    out_d2 = get_sess_ebd(out_d2, filter_mask)
     out_even = get_sess_ebd(out_even, mask_even)
     out_odd = get_sess_ebd(out_odd, mask_odd)
     out_p1 = get_sess_ebd(out_p1, mask_p1)
@@ -353,9 +383,10 @@ def contrastive_learning(model, i, data):
     criterion = NT_Xent(filter_mask.shape[0], model.temperature, 1)
     loss_even_odd = criterion(out_even, out_odd)
     loss_r1_r2 = criterion(out_r1, out_r2)
-    #loss_p1_p2 = criterion(out_p1, out_p2)
+    loss_d1_d2 = criterion(out_d1, out_d2)
+    loss_p1_p2 = criterion(out_p1, out_p2)
 
-    return loss_even_odd + loss_r1_r2
+    return loss_even_odd + loss_r1_r2 + loss_p1_p2 + loss_d1_d2
 
 def get_sess_ebd(seq_hidden, mask):
     mask_sum = torch.sum(mask, 1)
@@ -417,6 +448,11 @@ def train_test(model, train_data, test_data):
                 mrr.append(1 / rank)
     hit = np.mean(hit) * 100
     mrr = np.mean(mrr) * 100
+
+    # 封装模型
+    print('保存模型...')
+    joblib.dump(model, model.save_path)
+
     return hit, mrr
 
 

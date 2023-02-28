@@ -6,6 +6,15 @@
 ######################################################
 
 import numpy as np
+from random import sample
+
+def remove_n_random_items(lst, n):
+    to_delete = set(sample(range(len(lst)), n))
+
+    return [
+        item for index, item in enumerate(lst)
+        if not index in to_delete
+    ]
 
 
 def data_masks(all_usr_pois, item_tail):

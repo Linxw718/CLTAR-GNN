@@ -14,7 +14,7 @@ from model import *
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--dataset', default='diginetica',
+parser.add_argument('--dataset', default='yoochoose1_64',
                     help='dataset name: diginetica/yoochoose1_64/sample')
 parser.add_argument('--temperature', default=0.5, type=float,
                     help='temperature parameter used in NT_Xent loss')
@@ -36,9 +36,10 @@ parser.add_argument('--valid_portion', type=float, default=0.1,
                     help='split the portion of training set as validation set')
 parser.add_argument('--norm', default=True, help='adapt NISER, l2 norm over item and session embedding')
 parser.add_argument('--TA', default=False, help='use target-aware or not')
-parser.add_argument('--split_num', type=int, default=6, help='the ratio of dividing long-tail items and short-head items')
+parser.add_argument('--split_num', type=int, default=7, help='the ratio of dividing long-tail items and short-head items')
 parser.add_argument('--scale', default=True, help='scaling factor sigma')
 parser.add_argument('--gpu', default='0', help='which gpu to use')
+parser.add_argument('--save_path', default='./models/CLTAR_GNN.m', help='save path for trained model')
 
 opt = parser.parse_args()
 print(opt)
@@ -100,3 +101,40 @@ def main():
 
 if __name__ == '__main__':
     main()
+    """
+    train_data = pickle.load(open('./datasets/' + opt.dataset + '/train.txt', 'rb'))
+    if opt.validation:
+        train_data, valid_data = split_validation(train_data, opt.valid_portion)
+        test_data = valid_data
+    else:
+        test_data = pickle.load(open('./datasets/' + opt.dataset + '/test.txt', 'rb'))
+    train_data = Data(train_data, shuffle=True)
+    test_data = Data(test_data, shuffle=False)
+
+    if opt.dataset == 'diginetica':
+        n_node = 43098
+        len_max = 10  # take the last 10 items of the session as in NISER
+    elif opt.dataset == 'yoochoose1_64' or opt.dataset == 'yoochoose1_4':
+        n_node = 37484
+        len_max = 10
+    else:
+        n_node = 19183
+        len_max = 10
+
+    model = trans_to_cuda(TAR_GNN(opt, n_node, len_max))
+
+    start = time.time()
+    best_result = [0, 0]
+    best_epoch = [0, 0]
+    bad_counter = 0
+
+    model.scheduler.step()
+    print('start training: ', datetime.datetime.now())
+    model.train()
+    total_loss = 0.0
+    slices = train_data.generate_batch(model.batch_size)
+    all_targets = []
+    for i, j in tqdm(zip(slices, np.arange(len(slices))), total=len(slices)):
+        model.optimizer.zero_grad()
+        cl_loss = contrastive_learning(model, i, train_data)
+    """
